@@ -1,0 +1,109 @@
+#!/bin/env python3
+import requests
+import sys
+from pathlib import Path
+from urllib.request import urlretrieve
+import subprocess
+import json, re
+
+def get_installed():
+	ghpm = Path.home() / ".config" / "ghpm"
+	if not ghpm.exists():
+		ghpm.mkdir(parents=True)
+
+	packages = ghpm / "packages.json"
+	if packages.exists():
+		f = packages.open()
+		return json.load(f)
+	else:
+		return []
+
+def save_installed(installed):
+	ghpm = Path.home() / ".config" / "ghpm"
+	if not ghpm.exists():
+		ghpm.mkdir(parents=True, exist_ok=True)
+
+	packages = ghpm / "packages.json"
+	print(installed)
+	f = packages.open("w")
+	print(f)
+	json.dump(installed, f)
+	f.close()
+
+def get_assets_dict(r):
+	if "assets_url" not in r:
+		None
+	else:
+		assets_url = r["assets_url"]
+		return requests.get(assets_url).json()
+	return None
+
+def get_deb(assets):
+	for asset in assets:
+		name = asset["name"]
+		if name[-4:] == ".deb":
+			return asset
+
+def match_name(s):
+	m = re.search("Package: ([a-zA-Z\\-]{1,25})\n", s)
+	if m is not None:
+		return m.group(1)
+
+if __name__ == '__main__':
+	command = sys.argv[1]
+	if command == "list":
+		installed = get_installed()
+		for installation in installed:
+			name, repo, version = installation["name"], installation["repo"], installation["version"]
+			print(f"{name}, {repo}, {version}")
+
+	elif command == "uninstall":
+		repo = sys.argv[2]
+		installed = get_installed()
+		for installation in list(installed):
+			if repo == installation["repo"]:
+				name, repo, version = installation["name"], installation["repo"], installation["version"]
+				print(f"Uninstall {name}, {repo}, {version}")
+				subprocess.call(["sudo", "apt", "remove", name])
+				installed.pop(installed.index(installation))
+
+	elif command == "install":
+		repo = sys.argv[2]
+		repo = "/".join(repo.split("/"))
+		url = f"https://api.github.com/repos/{repo}/releases/latest"
+		r = requests.get(url)
+		data = r.json()
+
+		if "tag_name" in data:
+			version = data["tag_name"]
+			assets_dict = get_assets_dict(data)
+			if assets_dict is None:
+				print("No assets available for this release.")
+			else:
+				deb = get_deb(assets_dict)
+				print(deb)
+				downloads = Path.home() / "Downloads/"
+				fname = "-".join(repo.split("/")) + "@" + version + ".deb"
+				dst = downloads / fname
+				print(dst)
+				browser_download_url = deb["browser_download_url"]
+				print(f"Found {repo}@{version}.")
+
+				install = input("Wanna install? (y/N) ")
+				if install.lower() == "y" or install.lower() == "yes":
+					#urlretrieve(browser_download_url, dst)
+
+					print(list(downloads.glob("*.deb")))
+					package_info = subprocess.check_output(["dpkg", "--info", dst.absolute()])
+					package_info = package_info.decode("utf-8")
+					print(package_info)
+					package_name = match_name(package_info)
+
+					subprocess.call(["sudo", "apt", "install", dst.absolute()])
+					installation = {"repo": repo, "name": package_name, "version": version}
+					installed = get_installed() + [installation]
+					save_installed(installed)
+					#dst.unlink()
+					print(list(downloads.glob("*.deb")))
+	else:
+		print("Unrecognized prompt.")
